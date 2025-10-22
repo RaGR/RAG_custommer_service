@@ -1,0 +1,6 @@
+.venvs/
+venvs/
+env/
+**/.venvs/
+**/venvs/
+**/env/
