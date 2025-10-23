@@ -10,8 +10,8 @@ from app.core.config import settings
 import os
 from app.retrieval.vector import VectorSearcher
 
-DB_PATH = os.getenv("DB_PATH", "rag-instabot/db/app_data.sqlite")
-INDEX_PATH = os.getenv("INDEX_PATH", "rag-instabot/data/faiss_index")
+DB_PATH = os.getenv("DB_PATH", "/home/ragr/Desktop/rag-instabot/db/app_data.sqlite")
+INDEX_PATH = os.getenv("INDEX_PATH", "/home/ragr/Desktop/rag-instabot/data/faiss_index")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
 # Lazy-initialize vector searcher (at import time is fine for a single process)
