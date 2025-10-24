@@ -1,16 +1,28 @@
+"""Routers responsible for DM simulation and feedback submission."""
+
+from __future__ import annotations
+
+import logging
+import os
+import sqlite3
+import time
+from typing import Dict, List
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import List, Dict
-from app.retrieval.normalize import normalize_query
-from app.retrieval.fts import connect, search_fts
-from app.retrieval.vector import VectorSearcher
-from app.retrieval.score import filter_by_threshold, merge_unique
-from app.prompting.builder import build_prompt
-from app.llm.client import ask_llm
+
 from app.core.config import settings
-from app.security.auth import enforce_api_key
-from app.security.rate_limit import rate_limit
-import os, sqlite3, time
+from app.llm.client import ask_llm
+from app.prompting.builder import build_prompt
+from app.retrieval.fts import connect, search_fts
+from app.retrieval.normalize import normalize_query, sanitize_text
+from app.retrieval.score import filter_by_threshold, merge_unique
+from app.retrieval.vector import VectorSearcher
+from app.security.auth import Role, require_roles
+from app.security.hmac_sig import enforce_hmac
+from app.security.rate_limit import enforce_rate_limit
+
+logger = logging.getLogger("app.dm")
 
 DB_PATH = settings.db_path
 INDEX_PATH = settings.index_path
@@ -20,8 +32,8 @@ VEC = VectorSearcher(DB_PATH, INDEX_PATH, EMBED_MODEL)
 router = APIRouter(prefix="", tags=["dm"])
 
 class DMIn(BaseModel):
-    sender_id: str = Field(..., max_length=64)
-    message_id: str = Field(..., max_length=64)
+    sender_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9_\-:.]{1,64}$")
+    message_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9_\-:.]{1,64}$")
     text: str = Field(..., max_length=500)
 
 class DMOut(BaseModel):
@@ -40,13 +52,14 @@ _feedback_table_init()
 
 @router.post("/simulate_dm", response_model=DMOut)
 async def simulate_dm(payload: DMIn, request: Request):
-    await enforce_api_key(request)
-    await rate_limit(request)
+    context = await require_roles(request, (Role.CLIENT, Role.ANALYST, Role.ADMIN))
+    await enforce_hmac(request, context)
+    await enforce_rate_limit(request, context)
 
     q0 = payload.text
     q = normalize_query(q0)
     if not q:
-        raise HTTPException(status_code=400, detail="empty text")
+        raise HTTPException(status_code=400, detail={"code": "empty_text", "detail": "Empty text"})
 
     t0 = time.time()
 
@@ -66,27 +79,40 @@ async def simulate_dm(payload: DMIn, request: Request):
     answer = await ask_llm(prompt)
 
     dt = int((time.time() - t0) * 1000)
-    # Minimal safe log
-    print({
-        "path": "/simulate_dm", "latency_ms": dt,
-        "q_len": len(q0), "hits": len(retrieved),
-        "provider": settings.llm_provider
-    })
+    logger.info(
+        "simulate_dm",
+        extra={
+            "latency_ms": dt,
+            "hits": len(retrieved),
+            "provider": settings.llm_provider,
+            "q_len": len(q0),
+        },
+    )
 
     return DMOut(reply=answer)
 
 # Feedback endpoint
 class FeedbackIn(BaseModel):
-    message_id: str
-    rating: str
-    note: str | None = None
+    message_id: str = Field(..., max_length=64, pattern=r"^[A-Za-z0-9_\-:.]{1,64}$")
+    rating: str = Field(..., max_length=16, pattern=r"^[A-Za-z0-9_\-]+$")
+    note: str | None = Field(default=None, max_length=500)
 
 @router.post("/feedback")
 async def feedback(payload: FeedbackIn, request: Request):
-    await enforce_api_key(request)
-    await rate_limit(request)
-    con = sqlite3.connect(DB_PATH)
-    con.execute("INSERT INTO feedback(message_id, rating, note) VALUES (?,?,?)",
-                (payload.message_id, payload.rating[:16], (payload.note or "")[:500]))
-    con.commit(); con.close()
+    context = await require_roles(request, (Role.CLIENT, Role.ANALYST, Role.ADMIN))
+    await enforce_hmac(request, context)
+    await enforce_rate_limit(request, context)
+
+    note_clean = sanitize_text(payload.note or "", 500)
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute(
+            "INSERT INTO feedback(message_id, rating, note) VALUES (?,?,?)",
+            (payload.message_id, payload.rating[:16], note_clean),
+        )
+        con.commit()
+    except sqlite3.DatabaseError as exc:
+        raise HTTPException(status_code=500, detail={"code": "db_error", "detail": "Failed to persist feedback"}) from exc
+    finally:
+        con.close()
     return {"ok": True}

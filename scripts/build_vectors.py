@@ -23,6 +23,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Hard-disable GPUs for this process
 import sys
 import sqlite3
 import numpy as np
+from pathlib import Path
 
 # Torch must be imported after forcing CPU visibility above
 import torch  # noqa: E402
@@ -31,8 +32,9 @@ import faiss  # noqa: E402
 
 
 # ---------- Config ----------
-DB_PATH     = os.getenv("DB_PATH", "/home/ragr/Desktop/rag-instabot/db/app_data.sqlite")
-INDEX_PATH  = os.getenv("INDEX_PATH", "/home/ragr/Desktop/rag-instabot/data/faiss_index")
+BASE_DIR = Path(__file__).resolve().parents[1]
+DB_PATH     = os.getenv("DB_PATH", str(BASE_DIR / "db" / "app_data.sqlite"))
+INDEX_PATH  = os.getenv("INDEX_PATH", str(BASE_DIR / "data" / "faiss_index"))
 MODEL_NAME  = os.getenv("EMBED_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 BATCH_SIZE  = int(os.getenv("BATCH_SIZE", "32"))
 

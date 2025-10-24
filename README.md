@@ -29,16 +29,21 @@ Key components:
 rag-instabot/
 ├── app/
 │   ├── core/config.py
+│   ├── logging/setup.py
+│   ├── observability/metrics.py
+│   ├── providers/circuit.py
 │   ├── retrieval/{fts.py,vector.py,normalize.py}
 │   ├── prompting/builder.py
 │   ├── llm/client.py
-│   ├── routers/{dm.py,debug.py}
+│   ├── routers/{dm.py,admin_keys.py}
+│   ├── security/{auth.py,audit.py,cors.py,headers.py,hmac_sig.py,rate_limit.py}
 │   └── main.py
 ├── db/app_data.sqlite
 ├── data/faiss_index/{index.faiss,meta.npy}
 ├── scripts/{setup_fts.sh,build_vectors.py,rebuild_db.sh}
 ├── .env.example
 ├── README.md
+├── SECURITY_NOTES.md
 └── images/
 ├── proj-structure.png
 ├── env-structure.png
@@ -52,40 +57,29 @@ rag-instabot/
 
 ## ⚙️ Environment & Config
 
-Create and activate a virtual env:
+Create and activate a virtual env, then install all dependencies:
 
 ```bash
 python3 -m venv .venvs
 source .venvs/bin/activate
 pip install --upgrade pip
-pip install fastapi uvicorn[standard] httpx faiss-cpu sentence-transformers python-dotenv pydantic-settings
+pip install -r requirements.txt
 ````
 
-### `.env.example`
+### `.env` configuration
 
-```env
-APP_ENV=dev
-APP_PORT=8000
-RATE_LIMIT_PER_MIN=60
-LOG_LEVEL=INFO
+Copy `.env.example` to `.env` and update credentials. Leave secrets (e.g. `LLM_API_KEY`, JWT keys, HMAC shared secret) blank in source control, then populate them locally or in production.
 
-# --- Database & Vector ---
-DB_PATH=rag-instabot/db/app_data.sqlite
-INDEX_PATH=rag-instabot/data/faiss_index
-EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+Key variables:
 
-# --- LLM Provider (OpenRouter) ---
-LLM_PROVIDER=openrouter
-LLM_API_BASE=https://openrouter.ai/api/v1
-LLM_MODEL=deepseek/deepseek-chat-v3.1:free
-LLM_API_KEY=sk-**************
+- `AUTH_MODE` — `api_key` (default) or `jwt`.
+- `REQUIRE_API_KEY` / `API_KEY` — static fallback when persistent keys are unavailable.
+- `JWT_*` — signing key material when JWT auth is enabled (set `JWT_SIGNING_KEY` for HS256 or `JWT_PUBLIC_KEY` for RS256).
+- `HMAC_REQUIRED` / `HMAC_WINDOW_SEC` — enable signed requests with nonce replay defense.
+- `CORS_ORIGINS`, `SECURITY_HEADERS_ENABLED`, `MAX_REQUEST_BODY_BYTES`, `DEBUG_ROUTES` — tighten surface area per environment (set `CORS_ORIGINS` as a JSON list, e.g. `["http://localhost:8000"]`).
+- `RL_BUCKET_SIZE`, `RL_REFILL_PER_SEC`, `RL_IDENTITY_HEADER` — tune per-identity rate limiting.
 
-# Optional analytics headers (ASCII only)
-OR_HTTP_REFERER=http://localhost:8000/
-OR_X_TITLE=RAG-Instabot
-```
-
-Copy it to `.env` and insert your **OpenRouter API key**.
+LLM configuration (`LLM_API_BASE`, `LLM_API_KEY`, `LLM_MODEL`) remains required for inference.
 
 ---
 
@@ -124,6 +118,28 @@ Visit → [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
 
 ---
 
+## 🔐 Security & Privacy
+
+- **Authentication:** Argon2-hashed API keys stored in SQLite (`api_keys` table) with role-based access control (CLIENT, ANALYST, ADMIN). When Argon2 is unavailable, the service falls back to PBKDF2 (warning emitted). Optional JWT bearer mode supports HS256/RS256 keys with issuer/audience validation.
+- **Key management API:** ADMIN-only routes under `/admin/api-keys` let you create, enable, or disable credentials. New keys are returned once; store them securely.
+- **Request integrity:** Enable `HMAC_REQUIRED=true` to force `X-API-Key` clients to sign requests with `X-Signature`, `X-Timestamp`, and `X-Nonce`. Nonces are tracked per key to prevent replay.
+- **Rate limiting:** Token bucket per identity (`X-API-Key`, JWT `sub`, or IP) with configurable defaults and tenant overrides (`tenant_limits` table). Exceeds return `429` with `Retry-After`.
+- **Security headers:** Middleware enforces CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, and limits request bodies via `MAX_REQUEST_BODY_BYTES`.
+- **Audit & observability:** Structured JSON logs hash identities, omit secrets, and include latency/role data. `/metrics` (ADMIN/ANALYST) exports Prometheus-style counters including `llm_calls_total` and `ratelimit_block_total`. `/security/selftest` verifies critical configuration without revealing secrets.
+
+Security checklist:
+
+1. **Environment** — Fill in `.env` with your real API credentials, JWT signing material, and desired `AUTH_MODE`/`HMAC_REQUIRED`/`REQUIRE_API_KEY` settings. Keep committed files blank.
+2. **Database migrations** — Run `sqlite3 db/app_data.sqlite < migrations/security.sql` once to create the `api_keys`, `audit`, and `tenant_limits` tables.
+3. **API keys** — Use `/admin/api-keys` (ADMIN credential required) to mint production keys. Disable or rotate keys via the same endpoint; every change is logged in the `audit` table.
+4. **Signed requests** — When `HMAC_REQUIRED=true`, clients must send `X-Signature`, `X-Timestamp`, and `X-Nonce`. Nonces expire after `HMAC_WINDOW_SEC`.
+5. **JWT mode** — Configure `AUTH_MODE=jwt`, populate `JWT_SIGNING_KEY` (HS256) or `JWT_PUBLIC_KEY` (RS256), and ensure tokens embed roles (`CLIENT`, `ANALYST`, `ADMIN`) plus `iss`/`aud`.
+6. **Validation** — Run `python -m pytest -q` before deployment and call `/security/selftest` (ADMIN) at runtime to confirm the stack is secure.
+
+> Tip: run `pytest -q` to execute the security regression suite covering auth, JWT, HMAC, rate limiting, headers, and privacy logging.
+
+---
+
 ## 💻 Web Chat UI
 
 Lightweight built-in HTML interface for testing:
@@ -134,22 +150,6 @@ Lightweight built-in HTML interface for testing:
 <p align="center">
   <img src="images/chat-tested.png" width="600"/>
 </p>
-
----
-
-## 🔍 Debug Endpoints
-
-| Endpoint                | Description                     |
-| ----------------------- | ------------------------------- |
-| `/health`               | Environment / LLM status        |
-| `/debug/retrieve?q=...` | Inspect FAISS + FTS hits        |
-| `/debug/prompt?q=...`   | Preview full prompt sent to LLM |
-
-Example:
-
-```bash
-curl "http://127.0.0.1:8000/debug/retrieve?q=سرم ویتامین C برای پوست حساس"
-```
 
 ---
 

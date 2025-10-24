@@ -1,6 +1,16 @@
-import os, re, asyncio
+import asyncio
+import logging
+import os
+import re
+import time
+
 import httpx
+
 from app.core.config import settings
+from app.observability.metrics import record_llm_call
+from app.providers.circuit import get_circuit, increment_provider_failure
+
+logger = logging.getLogger("app.llm")
 
 _ASCII_RE = re.compile(r"[^\x20-\x7E]")
 
@@ -73,18 +83,42 @@ async def ask_llm(prompt: str) -> str:
     else:
         providers = []
 
-    for p in providers:
-        for _ in range(settings.llm_retries + 1):
+    last_err: Exception | None = None
+    for provider in providers:
+        circuit = get_circuit(provider)
+        if not circuit.allow():
+            logger.warning("circuit_open", extra={"provider": provider})
+            continue
+        for attempt in range(settings.llm_retries + 1):
             try:
-                if p == "openrouter":
-                    return await _try_openrouter(prompt)
+                start = time.time()
+                if provider == "openrouter":
+                    result = await _try_openrouter(prompt)
                 else:
-                    return await _try_hf(prompt)
+                    result = await _try_hf(prompt)
+                latency_ms = int((time.time() - start) * 1000)
+                circuit.record_success()
+                record_llm_call(latency_ms)
+                logger.info(
+                    "llm_success",
+                    extra={"provider": provider, "llm_ms": latency_ms},
+                )
+                return result
             except Exception as e:
-                await asyncio.sleep(0.6)
                 last_err = e
+                increment_provider_failure(provider)
+                circuit.record_failure()
+                logger.warning(
+                    "llm_failure",
+                    extra={"provider": provider, "attempt": attempt + 1, "error": type(e).__name__},
+                )
+                await asyncio.sleep(min(1.0, 0.6 * (attempt + 1)))
         # try next provider
     # Final fallback
+    logger.error(
+        "llm_fallback",
+        extra={"reason": str(last_err)[:120] if last_err else "no_provider"},
+    )
     if "داده‌های مرتبط:\n—" in prompt:
         return "اطلاعات کافی در دیتابیس موجود نیست."
     return "براساس داده‌های موجود، این گزینه‌ها مناسب‌اند. اگر مورد خاصی مدنظر دارید دقیق‌تر بفرمایید."
