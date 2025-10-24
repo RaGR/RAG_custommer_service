@@ -309,4 +309,4 @@ Unless required by applicable law or agreed to in writing, software distributed 
 
 Please read the full **technical documentation** for architecture details, security policies, and operational guidance:
 
-- `./Technical-Documentation.pdf`
+- [Technical-Documentation pdf file](./Technical-Documentation.pdf)
