@@ -25,12 +25,6 @@ class BucketState:
     tokens: float
     last_refill_ts: float
 
-
-_DEFAULT_BUCKET = BucketConfig(
-    capacity=float(settings.rl_bucket_size),
-    refill_rate=float(settings.rl_refill_per_sec),
-)
-
 _BUCKETS: dict[str, BucketState] = {}
 _TENANT_CACHE: dict[str, Tuple[BucketConfig, float]] = {}
 _TENANT_CACHE_TTL = 60.0
@@ -60,6 +54,13 @@ def _identity(request: Request, context: Optional[SecurityContext]) -> str:
     return f"ip:{host}"
 
 
+def _default_bucket() -> BucketConfig:
+    return BucketConfig(
+        capacity=float(settings.rl_bucket_size),
+        refill_rate=float(settings.rl_refill_per_sec),
+    )
+
+
 def _load_tenant_limit(identity: str) -> BucketConfig:
     now = time.monotonic()
     cached = _TENANT_CACHE.get(identity)
@@ -77,8 +78,9 @@ def _load_tenant_limit(identity: str) -> BucketConfig:
         _TENANT_CACHE[identity] = (config, now)
         return config
 
-    _TENANT_CACHE[identity] = (_DEFAULT_BUCKET, now)
-    return _DEFAULT_BUCKET
+    config = _default_bucket()
+    _TENANT_CACHE[identity] = (config, now)
+    return config
 
 
 async def enforce_rate_limit(request: Request, context: Optional[SecurityContext]) -> None:

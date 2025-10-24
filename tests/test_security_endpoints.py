@@ -40,6 +40,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
     auth._invalidate_api_key_cache()
     rate_limit._BUCKETS.clear()
     rate_limit.ratelimit_block_total = 0
+    rate_limit._TENANT_CACHE.clear()
     hmac_sig._NONCE_CACHE.clear()
 
     settings.require_api_key = True
@@ -49,7 +50,8 @@ def client(tmp_path, monkeypatch) -> TestClient:
     settings.auth_mode = "api_key"
     settings.max_request_body_bytes = 65_536
     settings.rl_bucket_size = 2
-    settings.rl_refill_per_sec = 0
+    settings.rl_refill_per_sec = 0.0
+    rate_limit._BUCKETS.clear()
 
     init_security_tables()
     dm._feedback_table_init()
@@ -152,7 +154,9 @@ def test_metrics_with_admin_key(client: TestClient):
 
 def test_rate_limit_exceeded(client: TestClient):
     settings.rl_bucket_size = 2
-    settings.rl_refill_per_sec = 0
+    settings.rl_refill_per_sec = 0.0
+    rate_limit._BUCKETS.clear()
+    rate_limit._TENANT_CACHE.clear()
     key, _ = issue_key()
     headers = {"X-API-Key": key}
     for _ in range(2):
@@ -295,7 +299,7 @@ def test_jwt_expired_token_denied(client: TestClient):
     settings.jwt_iss = "issuer"
     settings.jwt_aud = "aud"
 
-    token = build_token(["CLIENT"], exp=int(time.time()) - 10)
+    token = build_token(["CLIENT"], exp=int(time.time()) - 600)
     response = client.post(
         "/simulate_dm",
         json=simulate_payload(),

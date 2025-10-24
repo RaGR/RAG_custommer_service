@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import HTTPException, Request
+from fastapi import Request
+from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 from starlette.types import Message
 
 from app.core.config import settings
@@ -45,14 +45,14 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         if content_length:
             try:
                 if int(content_length) > limit:
-                    raise _payload_too_large()
+                    return _payload_too_large_response()
             except ValueError:
-                # ignore malformed header; we'll enforce after reading
+                # ignore malformed header; enforce after reading body
                 pass
 
         body = await request.body()
         if len(body) > limit:
-            raise _payload_too_large()
+            return _payload_too_large_response()
 
         body_consumed = False
 
@@ -70,8 +70,13 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def _payload_too_large() -> HTTPException:
-    return HTTPException(
+def _payload_too_large_response() -> Response:
+    return JSONResponse(
         status_code=413,
-        detail={"code": "payload_too_large", "detail": "Request body exceeds configured limit"},
+        content={
+            "detail": {
+                "code": "payload_too_large",
+                "detail": "Request body exceeds configured limit",
+            }
+        },
     )
