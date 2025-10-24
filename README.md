@@ -286,3 +286,27 @@ errors_total 0
 * **Headers**: enforce **ASCII-only** for OpenRouter; avoid Unicode header issues.
 * **Logging**: **no secrets or full prompts** in logs; only minimal structured fields (latency, hits, provider).
 * **Failover**: retries + provider chain (OpenRouter → HF) → safe fallback string.
+
+
+---
+
+
+## 10) License
+
+This project is licensed under the **Apache License 2.0**.
+
+You may not use the files in this repository except in compliance with the License.
+You may obtain a copy of the License at:
+
+- `LICENSE` (included in this repository)
+- https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an **"AS IS" BASIS**, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+
+---
+
+## Further Reading
+
+Please read the full **technical documentation** for architecture details, security policies, and operational guidance:
+
+- `./Technical-Documentation.pdf`
